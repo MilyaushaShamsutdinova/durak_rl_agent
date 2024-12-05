@@ -1,8 +1,7 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 import random
-
 
 class DurakEnv(gym.Env):
     SUITS = ['♥', '♦', '♣', '♠']
@@ -11,9 +10,9 @@ class DurakEnv(gym.Env):
     def __init__(self):
         super(DurakEnv, self).__init__()
 
-        self.deck = self._create_and_shuffle_deck()
-        self.player_hands = [self.deck[:6], self.deck[6:12]]
-        self.deck = self.deck[12:]
+        deck = self._create_and_shuffle_deck()
+        self.player_hands = [deck[:6], deck[6:12]]
+        self.deck = deck[12:]
         
         self.trump_card = self.deck[-1]
         self.trump_suit = self.deck[-1][1]
@@ -39,6 +38,7 @@ class DurakEnv(gym.Env):
 
         # 5 possible actions
         self.action_space = spaces.Discrete(5)
+        self.np_random = None
         # self.reset()
 
     def _create_and_shuffle_deck(self):
@@ -82,7 +82,10 @@ class DurakEnv(gym.Env):
             "turn_to_action": self.turn_to_action,
         }
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self.np_random, _ = gym.utils.seeding.np_random(seed)
+
         self.deck = self._create_and_shuffle_deck()
         self.player_hands = [self.deck[:6], self.deck[6:12]]
         self.deck = self.deck[12:]
@@ -97,11 +100,15 @@ class DurakEnv(gym.Env):
         self.game_done = False
         self.winner = None
         
-        print(self.player_hands[0])
-        print(self.player_hands[1])
-        print(self.trump_suit)
-        print(self.turn_to_attack)
-        return self._get_obs(self.turn_to_attack)
+        print("Player 0 hand:", self.player_hands[0])
+        print("Player 1 hand:", self.player_hands[1])
+        print("Trump card:", self.trump_card)
+        print("Turn to attack:", self.turn_to_attack)
+        print("Deck:", self.deck)
+        print("Example of table fulfilling: [('attack', (6, '♦')), ('defend', (12, '♦'))]")
+        print("The discard pile is a list of tables at each round.\n\n")
+
+        return self._get_obs(self.turn_to_attack), {}
 
     def step(self, action):
         reward = 0
@@ -289,9 +296,11 @@ class DurakEnv(gym.Env):
             # take up to 6 cards (attacker)
             attacker_take_card_number = max(6 - len(attacker_cards), 0)
             if attacker_take_card_number > 0:
-                take_cards = self.deck[len(self.deck)-attacker_take_card_number:]
+                # take_cards = self.deck[len(self.deck)-attacker_take_card_number:]
+                take_cards = self.deck[:attacker_take_card_number]
                 self.player_hands[player_number].extend(take_cards)
-                del self.deck[len(self.deck)-attacker_take_card_number:]
+                # del self.deck[len(self.deck)-attacker_take_card_number:]
+                del self.deck[:attacker_take_card_number]
                 print(f"Player {player_number}, take {take_cards} from the deck, {attacker_take_card_number} needed. deck size is {len(self.deck)}")
 
             return 2
@@ -345,41 +354,35 @@ class DurakEnv(gym.Env):
 
 def test_durak_env():
     env = DurakEnv()
-    num_episodes = 1
-    for episode in range(num_episodes):
-        obs = env.reset()
-        done = False
-        total_reward_p1 = 0
-        total_reward_p0 = 0
-        print(f"\n=== Начало эпизода {episode + 1} ===")
-        i = 0
-        t = 0
-        while not done:
-            # Получение доступных действий
-            obs = env._get_obs(player_number=obs['turn_to_action'])
-            player_num = obs['turn_to_action']
-            available_actions = env.get_available_actions()
-            if i < t:
-                print("---начало хода---")
-                print(obs)
-                print(f"Текущая рука: {obs['player_hand']}, Доступные действия: {available_actions}")
-            
-            # Случайное действие из доступных
-            action = np.random.choice(available_actions)
-            obs, reward, done, info = env.step(action)
-            # print(reward)
-            if player_num == 0: total_reward_p0 += reward
-            else: total_reward_p1 += reward
-
-            if i < t:
-                print(f"Действие: {action}, Награда: {reward}, Завершено: {done}, Колода: {obs['deck_size']}")
-                print(f"Стол: {obs['table']}, Количество карт противника: {obs['opponent_hand_size']}")
-                print(obs)
-                print("---конец хода---\n")
-            i += 1
+    
+    obs, _ = env.reset()
+    done = False
+    total_reward_p1 = 0
+    total_reward_p0 = 0
+    i = 0
+    t = 0
+    while not done:
+        obs = env._get_obs(player_number=obs['turn_to_action'])
+        player_num = obs['turn_to_action']
+        available_actions = env.get_available_actions()
+        if i < t:
+            print("---начало хода---")
+            print(obs)
+            print(f"Текущая рука: {obs['player_hand']}, Доступные действия: {available_actions}")
         
-        print(i)
-        print(f"=== Конец эпизода {episode + 1}, Общая награда: {total_reward_p0, total_reward_p1} ===")
+        action = np.random.choice(available_actions)
+        obs, reward, done, _ = env.step(action)
+        if player_num == 0: total_reward_p0 += reward
+        else: total_reward_p1 += reward
+
+        if i < t:
+            print(f"Действие: {action}, Награда: {reward}, Завершено: {done}, Колода: {obs['deck_size']}")
+            print(f"Стол: {obs['table']}, Количество карт противника: {obs['opponent_hand_size']}")
+            print(obs)
+            print("---конец хода---\n")
+        i += 1
+    
+    print(i, "ходов")
 
 if __name__ == "__main__":
     test_durak_env()
