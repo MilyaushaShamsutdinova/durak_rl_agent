@@ -2,6 +2,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import random
+from gymnasium.spaces import Sequence, Discrete
+
 
 class DurakEnv(gym.Env):
     SUITS = ['♥', '♦', '♣', '♠']
@@ -23,19 +25,9 @@ class DurakEnv(gym.Env):
         self.discard_pile = []
         self.game_done = False
         self.winner = None
+        self.next_pass = False
 
-        # Карты как ранги от 0 до 35 (9 карт x 4 масти)
-        self.observation_space = spaces.Dict({
-            "player_hand": spaces.MultiDiscrete([36] * 6),
-            "opponent_hand_size": spaces.Discrete(36),
-            "table": spaces.MultiDiscrete([36] * 12),
-            "discard_pile": spaces.MultiDiscrete([36] * 36),
-            "trump_suit": spaces.Discrete(4),
-            "deck_size": spaces.Discrete(24),
-            "turn_to_action": spaces.Discrete(2),
-            "turn_to_attack": spaces.Discrete(2)
-        })
-
+        self.observation_space = spaces.Box(low=-3, high=36, shape=(50,), dtype=np.int32)
         # 5 possible actions
         self.action_space = spaces.Discrete(5)
         self.np_random = None
@@ -46,7 +38,7 @@ class DurakEnv(gym.Env):
         random.shuffle(deck)
         return deck
 
-    def _encode_card(self, card):
+    def _card_to_idx(self, card):
         """Кодирование карты (ранг от 0 до 35)"""
         rank_index = self.RANKS.index(card[0])
         suit_index = self.SUITS.index(card[1])
@@ -68,19 +60,19 @@ class DurakEnv(gym.Env):
             return 1
     
     def _get_obs(self, player_number):
-        player_hand = self.player_hands[player_number]
+        player_hand = [self._card_to_idx(card) for card in self.player_hands[player_number]]
         opponent_hand_size = len(self.player_hands[1 - player_number])
+        table = [self._card_to_idx(card[1]) for card in self.table]
+        discard_pile = [self._card_to_idx(card[1]) for card in self.discard_pile]
 
-        return {
-            "player_hand": player_hand, # [self._encode_card(card) for card in player_hand],
-            "opponent_hand_size": opponent_hand_size,
-            "table": self.table, #[self._encode_card(card[1]) for card in self.table],
-            "discard_pile": self.discard_pile, # [self._encode_card(card[1]) for card in self.discard_pile],
-            "trump_suit": self.trump_suit, #self.SUITS.index(self.trump_suit),
-            "deck_size": len(self.deck),
-            "turn_to_attack": self.turn_to_attack,
-            "turn_to_action": self.turn_to_action,
-        }
+        obs = (
+            player_hand + [-1] + table + [-2] + discard_pile + [-3]
+            + [opponent_hand_size, self.SUITS.index(self.trump_suit), len(self.deck), self.turn_to_attack, self.turn_to_action]
+        )
+        
+        obs += [0] * (50 - len(obs))
+        
+        return np.array(obs, dtype=np.int32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -99,14 +91,15 @@ class DurakEnv(gym.Env):
         self.discard_pile = []
         self.game_done = False
         self.winner = None
+        self.next_pass = False
         
-        print("Player 0 hand:", self.player_hands[0])
-        print("Player 1 hand:", self.player_hands[1])
-        print("Trump card:", self.trump_card)
-        print("Turn to attack:", self.turn_to_attack)
-        print("Deck:", self.deck)
-        print("Example of table fulfilling: [('attack', (6, '♦')), ('defend', (12, '♦'))]")
-        print("The discard pile is a list of tables at each round.\n\n")
+        # print("Player 0 hand:", self.player_hands[0])
+        # print("Player 1 hand:", self.player_hands[1])
+        # print("Trump card:", self.trump_card)
+        # print("Turn to attack:", self.turn_to_attack)
+        # print("Deck:", self.deck)
+        # print("Example of table fulfilling: [('attack', (6, '♦')), ('defend', (12, '♦'))]")
+        # print("The discard pile is a list of tables at each round.\n\n")
 
         return self._get_obs(self.turn_to_attack), {}
 
@@ -114,16 +107,11 @@ class DurakEnv(gym.Env):
         reward = 0
         player_number = self.turn_to_action
 
-        # check that the action is valid
-        available_actions = self.get_available_actions()
-        if action not in available_actions:
-            raise ValueError(f"Action {action} is not valid in this state.")
-
         if self.winner is not None:
             self.game_done = True
             reward = 200 if len(self.player_hands[player_number]) == 0 else -200
-            print(f"Looser is {self.turn_to_action}")
-            return self._get_obs(player_number), reward, self.game_done, {"available_actions": available_actions}
+            # print(f"Looser is {self.turn_to_action}")
+            return self._get_obs(player_number), reward, self.game_done, {}
         
         if action == 0:
             if len(self.table) == 0:
@@ -143,14 +131,12 @@ class DurakEnv(gym.Env):
 
         # check for the end of a game
         if (len(self.player_hands[0]) == 0 or len(self.player_hands[1]) == 0) and not self.game_done:
-            # self.game_done = True
             self.winner = player_number if len(self.player_hands[player_number]) == 0 else 1-player_number
             reward = 200 if len(self.player_hands[player_number]) == 0 else -200
-            print(f"Winner is {self.winner}")
             self.turn_to_action = 1 - self.winner
             self.turn_to_attack = self.turn_to_action
 
-        return self._get_obs(player_number), reward, self.game_done, {"available_actions": available_actions}
+        return self._get_obs(player_number), reward, self.game_done, {'turn_to_action': self.turn_to_action}
 
     def _attack(self):
         """Attack - play random card from hand."""
@@ -158,13 +144,13 @@ class DurakEnv(gym.Env):
         player_cards = self.player_hands[player_number]
         
         if not player_cards:
-            print(f"Player {player_number} has no cards left to attack.")
+            # print(f"Player {player_number} has no cards left to attack.")
             return -10000
 
         chosen_card = random.choice(player_cards)
         self.player_hands[player_number].remove(chosen_card)
         self.table.append((0, chosen_card))
-        print(f"Player {player_number}, attack {chosen_card}, +0")
+        # print(f"Player {player_number}, attack {chosen_card}, +0")
 
         self.turn_to_action = 1 - self.turn_to_action
         return 0
@@ -172,9 +158,10 @@ class DurakEnv(gym.Env):
     def get_available_actions(self):
         """Возвращает список допустимых действий в текущем состоянии."""
         if self.turn_to_action == self.turn_to_attack:
-            if not self.table:
+            if len(self.table)==0 and not self.next_pass:
                 return [0]
-            elif self.table == [(4, None)]:
+            elif len(self.table)==0 and self.next_pass:
+                self.next_pass = False
                 return [2]
             else:
                 return [1, 2] if self._can_throw_card() else [2]
@@ -219,7 +206,7 @@ class DurakEnv(gym.Env):
         player_cards = self.player_hands[player_number]
         
         if not player_cards:
-            print(f"Player {player_number} has no cards left to attack.")
+            # print(f"Player {player_number} has no cards left to attack.")
             return -10000
         
         ranks_on_table = [card[1][0] for card in self.table]
@@ -229,13 +216,13 @@ class DurakEnv(gym.Env):
                 throwable_cards.append(card)
 
         if not throwable_cards:
-            print(f"Player {player_number} has no cards left to throw up.")
+            # print(f"Player {player_number} has no cards left to throw up.")
             return -10000
         
         chosen_card = random.choice(throwable_cards)
         self.player_hands[player_number].remove(chosen_card)
         self.table.append((1, chosen_card))
-        print(f"Player {player_number}, throw up {chosen_card}, +0.5")
+        # print(f"Player {player_number}, throw up {chosen_card}, +0.5")
 
         self.turn_to_action = 1 - self.turn_to_action
         return 0.5
@@ -245,7 +232,7 @@ class DurakEnv(gym.Env):
         player_number = 1 - self.turn_to_attack
         attack_card = self.table[-1][1]
         if not self.table[-1][0] in [0, 1]:
-            print(f'Order was ruined. Last action is {self.table[-1][0]}.')
+            # print(f'Order was ruined. Last action is {self.table[-1][0]}.')
             return -10000
         
         defender_cards = self.player_hands[player_number]
@@ -255,13 +242,13 @@ class DurakEnv(gym.Env):
                 defending_cards.append(card)
         
         if not defending_cards:
-            print(f'Player {player_number} couldn\'t defend.')
+            # print(f'Player {player_number} couldn\'t defend.')
             return -10000
         
         chosen_card = random.choice(defending_cards)
         self.player_hands[player_number].remove(chosen_card)
         self.table.append((3, chosen_card))
-        print(f"Player {player_number}, defend {chosen_card}, +0.5")
+        # print(f"Player {player_number}, defend {chosen_card}, +0.5")
 
         self.turn_to_action = 1 - self.turn_to_action
         return 0.5
@@ -272,10 +259,11 @@ class DurakEnv(gym.Env):
 
         pick_up_cards = [card[1] for card in self.table]
         self.player_hands[player_number].extend(pick_up_cards)
-        self.table = [(4, None)]
-        print(f"Player {player_number}, picks up cards from table, -2")
+        self.table = []
+        # print(f"Player {player_number}, picks up cards from table, -2")
 
         self.turn_to_action = 1 - self.turn_to_action
+        self.next_pass = True
         return -2
 
     def _pass(self):
@@ -286,28 +274,24 @@ class DurakEnv(gym.Env):
         player_number = self.turn_to_attack
         attacker_cards = self.player_hands[player_number]
         defender_cards = self.player_hands[player_number - 1]
-        last_action = self.table[-1]
         
-        if last_action[0] == 4:
-            print(f"Player {player_number}, says PASS, +2")
+        if len(self.table) == 0:
+            # print(f"Player {player_number}, says PASS, +2")
             self.table = []
             self.turn_to_action = self.turn_to_attack
 
             # take up to 6 cards (attacker)
             attacker_take_card_number = max(6 - len(attacker_cards), 0)
             if attacker_take_card_number > 0:
-                # take_cards = self.deck[len(self.deck)-attacker_take_card_number:]
                 take_cards = self.deck[:attacker_take_card_number]
                 self.player_hands[player_number].extend(take_cards)
-                # del self.deck[len(self.deck)-attacker_take_card_number:]
                 del self.deck[:attacker_take_card_number]
-                print(f"Player {player_number}, take {take_cards} from the deck, {attacker_take_card_number} needed. deck size is {len(self.deck)}")
+                # print(f"Player {player_number}, take {take_cards} from the deck, {attacker_take_card_number} needed. deck size is {len(self.deck)}")
 
             return 2
 
-        elif last_action[0] == 3:
-            print(f"Player {player_number}, says PASS, +0")
-            self.discard_pile.append(self.table)
+        elif self.table[-1][0] == 3:
+            self.discard_pile.extend(self.table)
             self.table = []
             self.turn_to_attack = 1 - self.turn_to_attack
             self.turn_to_action = self.turn_to_attack
@@ -339,51 +323,49 @@ class DurakEnv(gym.Env):
                 take_cards = self.deck[:attacker_take_card_number:]
                 self.player_hands[player_number].extend(take_cards)
                 del self.deck[:attacker_take_card_number:]
-                print(f"Player {player_number}, take {take_cards} from the deck, {attacker_take_card_number} needed. deck size is {len(self.deck)}")
+                # print(f"Player {player_number}, take {take_cards} from the deck, {attacker_take_card_number} needed. deck size is {len(self.deck)}")
 
             
             if defender_take_card_number > 0:
                 take_cards = self.deck[:defender_take_card_number:]
                 self.player_hands[player_number - 1].extend(take_cards)
                 del self.deck[:defender_take_card_number:]
-                print(f"Player {1-player_number}, take {take_cards} from the deck, {defender_take_card_number} needed. deck size is {len(self.deck)}")
+                # print(f"Player {1-player_number}, take {take_cards} from the deck, {defender_take_card_number} needed. deck size is {len(self.deck)}")
 
             return 0
+        
+    def get_turn_to_action(self, obs):
+        try:
+            delimiter_index = np.where(obs == -3)[0][0]
+            return obs[delimiter_index + 4]
+        except IndexError:
+            raise ValueError("Invalid observation format. Delimiter -3 not found or incorrect observation length.")
 
 
 
 def test_durak_env():
     env = DurakEnv()
-    
+
     obs, _ = env.reset()
+    print(obs)
     done = False
     total_reward_p1 = 0
     total_reward_p0 = 0
     i = 0
-    t = 0
+
     while not done:
-        obs = env._get_obs(player_number=obs['turn_to_action'])
-        player_num = obs['turn_to_action']
+        obs = env._get_obs(player_number=env.get_turn_to_action(obs))
+        player_num = env.get_turn_to_action(obs)
         available_actions = env.get_available_actions()
-        if i < t:
-            print("---начало хода---")
-            print(obs)
-            print(f"Текущая рука: {obs['player_hand']}, Доступные действия: {available_actions}")
         
         action = np.random.choice(available_actions)
         obs, reward, done, _ = env.step(action)
         if player_num == 0: total_reward_p0 += reward
         else: total_reward_p1 += reward
-
-        if i < t:
-            print(f"Действие: {action}, Награда: {reward}, Завершено: {done}, Колода: {obs['deck_size']}")
-            print(f"Стол: {obs['table']}, Количество карт противника: {obs['opponent_hand_size']}")
-            print(obs)
-            print("---конец хода---\n")
         i += 1
     
-    print(i, "ходов")
+    print(i, "steps")
 
-if __name__ == "__main__":
-    test_durak_env()
+# if __name__ == "__main__":
+#     test_durak_env()
 
