@@ -1,0 +1,4 @@
+gymnasium==0.29.1
+numpy==2.2.1
+setuptools==65.5.0
+torch==2.4.1+cu124
