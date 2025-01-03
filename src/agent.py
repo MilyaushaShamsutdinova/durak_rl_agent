@@ -89,6 +89,7 @@ agent_0 = DQNAgent(state_dim, action_dim)
 agent_1 = DQNAgent(state_dim, action_dim)
 
 episodes = 700
+win_rate = 0
 
 for episode in range(episodes):
     state, _ = env.reset()
@@ -113,12 +114,17 @@ for episode in range(episodes):
         else:
             agent_1.store_transition(state, action, reward, next_state, done)
             total_reward[1] += reward
-            agent_1.train()
+            # agent_1.train()
 
 
         state = next_state
 
     agent_0.update_target_network()
-    agent_1.update_target_network()
+    # agent_1.update_target_network()
 
+    # if (episode + 1) % 15 == 0:
     print(f"Episode {episode + 1}: Total Reward Agent 1: {total_reward[0]}, Total Reward Agent 2: {total_reward[1]}")
+    if total_reward[1] > 100:
+        win_rate += 1
+
+print(f"Win rate: {win_rate / episodes}")
